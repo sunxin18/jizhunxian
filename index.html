@@ -19,7 +19,7 @@
 
         <div class="account-entry" id="userChip">
           <button class="login-trigger" id="loginOpenBtn">
-            <span>登录 / 注册</span>
+            <span>登录 / 创建账号</span>
             <small>同步自选 · 购买报告</small>
           </button>
         </div>
@@ -296,11 +296,11 @@
         <header class="login-head">
           <div>
             <p class="eyebrow">ACCOUNT</p>
-            <h2 id="loginTitle">登录基准线</h2>
+            <h2 id="loginTitle">登录或创建账号</h2>
           </div>
           <button class="ghost login-close" id="loginCloseBtn" title="关闭">×</button>
         </header>
-        <p class="login-copy">登录后会把自选、持仓、提醒和购买记录同步到服务器。本版本先用手机号作为账号标识，后续可升级短信验证码或微信登录。</p>
+        <p class="login-copy">输入手机号即可进入；第一次使用会自动创建账号，已有手机号会直接登录并同步云端数据。</p>
         <div class="login-form">
           <label>
             <span>昵称</span>
@@ -308,13 +308,9 @@
           </label>
           <label>
             <span>手机号</span>
-            <input id="loginPhone" maxlength="11" inputmode="numeric" placeholder="用于云端账号标识" />
+            <input id="loginPhone" maxlength="11" inputmode="numeric" placeholder="例如 13800000000" />
           </label>
-          <button class="primary" id="loginSubmitBtn">进入看盘</button>
-        </div>
-        <div class="login-note">
-          <strong>当前登录已经接入服务器</strong>
-          <span>服务器会保存账号、自选、持仓、提醒和按次购买订单；本地缓存只用于离线兜底。</span>
+          <button class="primary" id="loginSubmitBtn">登录 / 创建账号</button>
         </div>
       </section>
     </div>

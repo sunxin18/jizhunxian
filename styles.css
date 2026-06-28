@@ -1083,27 +1083,6 @@ footer {
   font-weight: 800;
 }
 
-.login-note {
-  display: grid;
-  gap: 5px;
-  margin-top: 14px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.login-note strong {
-  color: var(--paper);
-  font-size: 13px;
-}
-
-.login-note span {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
 .detail-overlay.open {
   display: flex;
 }

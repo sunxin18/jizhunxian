@@ -214,7 +214,7 @@ function renderUser() {
   if (!currentUser) {
     els.userChip.innerHTML = `
       <button class="login-trigger" id="loginOpenBtn">
-        <span>登录 / 注册</span>
+        <span>登录 / 创建账号</span>
         <small>同步自选 · 购买报告</small>
       </button>
     `;
@@ -279,7 +279,7 @@ async function submitLogin() {
   saveUser(nextUser);
   if (shouldSyncLocalState) queueStateSync();
   closeLogin();
-  pulseStatus(`欢迎回来，${name}`);
+  pulseStatus(shouldSyncLocalState ? `账号已创建，${name}` : `欢迎回来，${name}`);
 }
 
 async function logoutUser() {
