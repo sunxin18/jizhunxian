@@ -1110,6 +1110,10 @@ footer {
   line-height: 1.7;
 }
 
+.login-tabs {
+  margin-top: 16px;
+}
+
 .login-form {
   display: grid;
   gap: 12px;
@@ -1125,6 +1129,21 @@ footer {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.code-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: 10px;
+}
+
+.code-input-row .ghost {
+  width: 100%;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 .detail-overlay.open {
@@ -1372,6 +1391,10 @@ footer {
   .detail-close {
     width: 42px;
     justify-self: end;
+  }
+
+  .code-input-row {
+    grid-template-columns: 1fr;
   }
 
   .market-tape {

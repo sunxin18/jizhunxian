@@ -4,20 +4,46 @@ from pathlib import Path
 from urllib.parse import urlparse
 import hashlib
 import json
+import os
 import re
 import secrets
 import sqlite3
 import time
+import urllib.error
+import urllib.request
 
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "app.db"
 LEGACY_DB_PATH = DATA_DIR / "db.json"
+
+
+def load_env_file():
+    env_path = DATA_DIR / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
+load_env_file()
+
 HOST = "0.0.0.0"
 PORT = 8080
 SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 MAX_JSON_BYTES = 256 * 1024
+EMAIL_CODE_TTL_MS = 10 * 60 * 1000
+EMAIL_CODE_RESEND_MS = 60 * 1000
+EMAIL_CODE_MAX_ATTEMPTS = 5
+RESEND_API_URL = "https://api.resend.com/emails"
+RESEND_FROM = os.environ.get("RESEND_FROM", "基准线 <onboarding@resend.dev>")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_DRY_RUN = os.environ.get("RESEND_DRY_RUN", "") == "1"
 
 DEFAULT_STATE = {
     "funds": ["161725", "110022", "005827", "003096"],
@@ -39,6 +65,7 @@ PRODUCTS = {
 }
 
 LOGIN_BUCKET = {}
+EMAIL_BUCKET = {}
 
 
 def now_ms():
@@ -49,8 +76,10 @@ def iso_now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def user_key(phone):
-    return hashlib.sha256(phone.encode("utf-8")).hexdigest()[:24]
+def user_key(account_type, account_value):
+    if account_type == "phone":
+        return hashlib.sha256(account_value.encode("utf-8")).hexdigest()[:24]
+    return hashlib.sha256(f"{account_type}:{account_value}".encode("utf-8")).hexdigest()[:24]
 
 
 def db_connect():
@@ -70,6 +99,9 @@ def init_db():
               id TEXT PRIMARY KEY,
               name TEXT NOT NULL,
               phone TEXT NOT NULL UNIQUE,
+              email TEXT NOT NULL DEFAULT '',
+              account_type TEXT NOT NULL DEFAULT 'phone',
+              account_value TEXT NOT NULL DEFAULT '',
               credits INTEGER NOT NULL DEFAULT 30,
               state_json TEXT NOT NULL,
               created_at TEXT NOT NULL,
@@ -93,9 +125,42 @@ def init_db():
               created_at INTEGER NOT NULL,
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS email_codes (
+              id TEXT PRIMARY KEY,
+              email TEXT NOT NULL,
+              code_hash TEXT NOT NULL,
+              expires_at INTEGER NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              consumed_at INTEGER,
+              created_at INTEGER NOT NULL
+            );
             """
         )
+        ensure_column(conn, "users", "email", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(conn, "users", "account_type", "TEXT NOT NULL DEFAULT 'phone'")
+        ensure_column(conn, "users", "account_value", "TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            """
+            UPDATE users
+            SET account_type = 'phone', account_value = phone
+            WHERE account_value = ''
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_account
+            ON users(account_type, account_value)
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email, created_at)")
     migrate_legacy_json()
+
+
+def ensure_column(conn, table, column, definition):
+    columns = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def migrate_legacy_json():
@@ -114,13 +179,16 @@ def migrate_legacy_json():
             conn.execute(
                 """
                 INSERT OR IGNORE INTO users
-                (id, name, phone, credits, state_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, name, phone, email, account_type, account_value, credits, state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
                     str(user.get("name") or "养基用户")[:16],
                     str(user.get("phone") or ""),
+                    str(user.get("email") or ""),
+                    "email" if user.get("email") else "phone",
+                    str(user.get("email") or user.get("phone") or ""),
                     int(user.get("credits") or 30),
                     state_json,
                     user.get("createdAt") or iso_now(),
@@ -164,10 +232,15 @@ def state_from_row(row):
 
 
 def public_user(row, token=None):
+    phone = row["phone"]
+    if str(phone).startswith("__email__"):
+        phone = ""
     payload = {
         "id": row["id"],
         "name": row["name"],
-        "phone": row["phone"],
+        "phone": phone,
+        "email": row["email"] if "email" in row.keys() else "",
+        "accountType": row["account_type"] if "account_type" in row.keys() else "phone",
         "credits": row["credits"],
         "createdAt": row["created_at"],
     }
@@ -219,6 +292,57 @@ def clean_state_payload(state):
     return {"funds": funds, "holdings": holdings, "alerts": alerts, "sort": sort}
 
 
+def clean_email(value):
+    email = str(value or "").strip().lower()
+    if len(email) > 120:
+        return ""
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return ""
+    return email
+
+
+def code_hash(email, code):
+    pepper = RESEND_API_KEY or os.environ.get("CODE_PEPPER", "jizhunxian-dev")
+    return hashlib.sha256(f"{email}:{code}:{pepper}".encode("utf-8")).hexdigest()
+
+
+def send_email_code(email, code):
+    if RESEND_DRY_RUN:
+        return {"id": "dry-run", "dryRun": True}
+    if not RESEND_API_KEY:
+        raise RuntimeError("Resend API Key 未配置")
+
+    payload = json.dumps({
+        "from": RESEND_FROM,
+        "to": [email],
+        "subject": "基准线登录验证码",
+        "html": f"""
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827;line-height:1.6">
+            <h2>基准线登录验证码</h2>
+            <p>你的验证码是：</p>
+            <p style="font-size:30px;font-weight:800;letter-spacing:6px;margin:20px 0">{code}</p>
+            <p>验证码 10 分钟内有效。若不是你本人操作，可以忽略这封邮件。</p>
+          </div>
+        """,
+        "text": f"你的基准线登录验证码是 {code}，10 分钟内有效。",
+    }, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        RESEND_API_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "ignore")
+        raise RuntimeError(f"邮件发送失败：{detail[:120]}")
+
+
 class AppHandler(SimpleHTTPRequestHandler):
     server_version = "JizhunxianServer/2.0"
 
@@ -259,6 +383,10 @@ class AppHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/login":
             return self.login()
+        if path == "/api/email-code":
+            return self.send_email_code_endpoint()
+        if path == "/api/email-login":
+            return self.email_login()
         if path == "/api/logout":
             return self.logout()
         if path == "/api/state":
@@ -276,24 +404,112 @@ class AppHandler(SimpleHTTPRequestHandler):
         phone = "".join(ch for ch in str(body.get("phone") or "") if ch.isdigit())
         if not re.fullmatch(r"1[3-9]\d{9}", phone):
             return self.error_response("invalid_phone", "请输入 11 位中国大陆手机号", 422)
+        return self.create_login_session("phone", phone, name)
 
-        user_id = user_key(phone)
+    def send_email_code_endpoint(self):
+        body = self.read_json()
+        email = clean_email(body.get("email"))
+        if not email:
+            return self.error_response("invalid_email", "请输入正确的邮箱地址", 422)
+        if not self.allow_email_attempt(email):
+            return self.error_response("rate_limited", "验证码发送太频繁，请稍后再试", 429)
+
+        with db_connect() as conn:
+            latest = conn.execute(
+                """
+                SELECT created_at
+                FROM email_codes
+                WHERE email = ? AND consumed_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (email,),
+            ).fetchone()
+            if latest and now_ms() - latest["created_at"] < EMAIL_CODE_RESEND_MS:
+                return self.error_response("rate_limited", "请 60 秒后再获取验证码", 429)
+
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        try:
+            send_result = send_email_code(email, code)
+        except RuntimeError as exc:
+            return self.error_response("email_send_failed", str(exc), 502)
+
+        code_id = secrets.token_hex(12)
+        with db_connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO email_codes
+                (id, email, code_hash, expires_at, attempts, consumed_at, created_at)
+                VALUES (?, ?, ?, ?, 0, NULL, ?)
+                """,
+                (code_id, email, code_hash(email, code), now_ms() + EMAIL_CODE_TTL_MS, now_ms()),
+            )
+            conn.execute("DELETE FROM email_codes WHERE expires_at < ?", (now_ms() - EMAIL_CODE_TTL_MS,))
+
+        payload = {"ok": True, "email": email, "expiresIn": EMAIL_CODE_TTL_MS // 1000}
+        if send_result.get("dryRun"):
+            payload["debugCode"] = code
+        return self.json_response(payload)
+
+    def email_login(self):
+        if not self.allow_login_attempt():
+            return self.error_response("rate_limited", "操作太频繁，请稍后再试", 429)
+
+        body = self.read_json()
+        name = re.sub(r"\s+", "", str(body.get("name") or "养基用户"))[:16] or "养基用户"
+        email = clean_email(body.get("email"))
+        code = "".join(ch for ch in str(body.get("code") or "") if ch.isdigit())[:6]
+        if not email:
+            return self.error_response("invalid_email", "请输入正确的邮箱地址", 422)
+        if not re.fullmatch(r"\d{6}", code):
+            return self.error_response("invalid_code", "请输入 6 位邮箱验证码", 422)
+
+        with db_connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM email_codes
+                WHERE email = ? AND consumed_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (email,),
+            ).fetchone()
+            if not row or row["expires_at"] < now_ms():
+                return self.error_response("code_expired", "验证码已过期，请重新获取", 422)
+            if row["attempts"] >= EMAIL_CODE_MAX_ATTEMPTS:
+                return self.error_response("too_many_attempts", "验证码错误次数过多，请重新获取", 422)
+            if row["code_hash"] != code_hash(email, code):
+                conn.execute("UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?", (row["id"],))
+                return self.error_response("invalid_code", "验证码不正确", 422)
+            conn.execute("UPDATE email_codes SET consumed_at = ? WHERE id = ?", (now_ms(), row["id"]))
+
+        return self.create_login_session("email", email, name)
+
+    def create_login_session(self, account_type, account_value, name):
+        user_id = user_key(account_type, account_value)
         created = iso_now()
         token = secrets.token_urlsafe(32)
         expires_at = now_ms() + SESSION_TTL_MS
+        phone = account_value if account_type == "phone" else f"__email__{user_id}"
+        email = account_value if account_type == "email" else ""
         with db_connect() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             is_new_user = row is None
             if is_new_user:
                 conn.execute(
                     """
-                    INSERT INTO users (id, name, phone, credits, state_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO users
+                    (id, name, phone, email, account_type, account_value, credits, state_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id,
                         name,
                         phone,
+                        email,
+                        account_type,
+                        account_value,
                         30,
                         json.dumps(DEFAULT_STATE, ensure_ascii=False),
                         created,
@@ -302,8 +518,12 @@ class AppHandler(SimpleHTTPRequestHandler):
                 )
             else:
                 conn.execute(
-                    "UPDATE users SET name = ?, phone = ?, updated_at = ? WHERE id = ?",
-                    (name, phone, now_ms(), user_id),
+                    """
+                    UPDATE users
+                    SET name = ?, phone = ?, email = ?, account_type = ?, account_value = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (name, phone, email, account_type, account_value, now_ms(), user_id),
                 )
             conn.execute(
                 "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
@@ -409,6 +629,16 @@ class AppHandler(SimpleHTTPRequestHandler):
             return False
         bucket.append(now_ms())
         LOGIN_BUCKET[ip] = bucket
+        return True
+
+    def allow_email_attempt(self, email):
+        key = f"{self.client_address[0]}:{email}"
+        bucket = [ts for ts in EMAIL_BUCKET.get(key, []) if now_ms() - ts < 10 * 60_000]
+        if len(bucket) >= 5:
+            EMAIL_BUCKET[key] = bucket
+            return False
+        bucket.append(now_ms())
+        EMAIL_BUCKET[key] = bucket
         return True
 
     def auth_token(self):

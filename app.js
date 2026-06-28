@@ -38,6 +38,9 @@ let activeDetailCode = null;
 let activeHistorySize = DEFAULT_HISTORY_SIZE;
 let currentUser = loadUser();
 let userOrders = [];
+let loginMode = "phone";
+let emailCodeCooldownTimer = null;
+let emailCodeCooldown = 0;
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -51,8 +54,12 @@ const els = {
   loginOpenBtn: $("loginOpenBtn"),
   loginOverlay: $("loginOverlay"),
   loginCloseBtn: $("loginCloseBtn"),
+  loginMode: $("loginMode"),
   loginName: $("loginName"),
   loginPhone: $("loginPhone"),
+  loginEmail: $("loginEmail"),
+  loginCode: $("loginCode"),
+  sendCodeBtn: $("sendCodeBtn"),
   loginSubmitBtn: $("loginSubmitBtn"),
   fundInput: $("fundInput"),
   addFundBtn: $("addFundBtn"),
@@ -193,6 +200,11 @@ function bindEvents() {
   els.saveAlertBtn.addEventListener("click", saveAlert);
   els.loginOpenBtn.addEventListener("click", openLogin);
   els.loginCloseBtn.addEventListener("click", closeLogin);
+  els.loginMode.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-login-mode]");
+    if (button) setLoginMode(button.dataset.loginMode);
+  });
+  els.sendCodeBtn.addEventListener("click", sendEmailCode);
   els.loginSubmitBtn.addEventListener("click", submitLogin);
   els.loginOverlay.addEventListener("click", (event) => {
     if (event.target === els.loginOverlay) closeLogin();
@@ -235,7 +247,7 @@ function renderUser() {
     return;
   }
 
-  const accountType = currentUser.token ? "云端账号" : "本地缓存账号";
+  const accountType = currentUser.accountType === "email" ? "邮箱账号" : currentUser.token ? "云端账号" : "本地缓存账号";
   els.userChip.innerHTML = `
     <div class="account-card">
       <div class="avatar">${escapeHtml(currentUser.name.slice(0, 1).toUpperCase())}</div>
@@ -252,6 +264,9 @@ function renderUser() {
 function openLogin() {
   els.loginName.value = currentUser?.name || "";
   els.loginPhone.value = currentUser?.phone || "";
+  els.loginEmail.value = currentUser?.email || "";
+  els.loginCode.value = "";
+  setLoginMode(currentUser?.accountType === "email" ? "email" : "phone");
   els.loginOverlay.classList.add("open");
   els.loginOverlay.setAttribute("aria-hidden", "false");
   window.setTimeout(() => els.loginName.focus(), 0);
@@ -262,25 +277,97 @@ function closeLogin() {
   els.loginOverlay.setAttribute("aria-hidden", "true");
 }
 
+function setLoginMode(mode) {
+  loginMode = mode === "email" ? "email" : "phone";
+  els.loginMode.querySelectorAll("button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.loginMode === loginMode);
+  });
+  document.querySelectorAll(".phone-login-field").forEach((item) => {
+    item.hidden = loginMode !== "phone";
+  });
+  document.querySelectorAll(".email-login-field").forEach((item) => {
+    item.hidden = loginMode !== "email";
+  });
+}
+
+async function sendEmailCode() {
+  const email = els.loginEmail.value.trim().toLowerCase();
+  if (!isValidEmail(email)) {
+    pulseStatus("请输入正确的邮箱地址");
+    els.loginEmail.focus();
+    return;
+  }
+  if (emailCodeCooldown > 0) return;
+
+  els.sendCodeBtn.disabled = true;
+  try {
+    await apiRequest("/api/email-code", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    });
+    pulseStatus("验证码已发送，请查收邮箱");
+    startEmailCodeCooldown(60);
+  } catch (error) {
+    pulseStatus(error.message || "验证码发送失败，请稍后再试");
+    els.sendCodeBtn.disabled = false;
+  }
+}
+
+function startEmailCodeCooldown(seconds) {
+  emailCodeCooldown = seconds;
+  window.clearInterval(emailCodeCooldownTimer);
+  updateEmailCodeButton();
+  emailCodeCooldownTimer = window.setInterval(() => {
+    emailCodeCooldown -= 1;
+    updateEmailCodeButton();
+    if (emailCodeCooldown <= 0) {
+      window.clearInterval(emailCodeCooldownTimer);
+      els.sendCodeBtn.disabled = false;
+      els.sendCodeBtn.textContent = "获取验证码";
+    }
+  }, 1000);
+}
+
+function updateEmailCodeButton() {
+  els.sendCodeBtn.disabled = emailCodeCooldown > 0;
+  els.sendCodeBtn.textContent = emailCodeCooldown > 0 ? `${emailCodeCooldown}s` : "获取验证码";
+}
+
 async function submitLogin() {
   const name = els.loginName.value.trim() || "养基用户";
   const phone = els.loginPhone.value.trim().replace(/\D/g, "");
-  if (!/^1[3-9]\d{9}$/.test(phone)) {
+  const email = els.loginEmail.value.trim().toLowerCase();
+  const code = els.loginCode.value.trim().replace(/\D/g, "");
+  if (loginMode === "phone" && !/^1[3-9]\d{9}$/.test(phone)) {
     pulseStatus("请输入 11 位中国大陆手机号");
     els.loginPhone.focus();
     return;
   }
+  if (loginMode === "email" && !isValidEmail(email)) {
+    pulseStatus("请输入正确的邮箱地址");
+    els.loginEmail.focus();
+    return;
+  }
+  if (loginMode === "email" && !/^\d{6}$/.test(code)) {
+    pulseStatus("请输入 6 位邮箱验证码");
+    els.loginCode.focus();
+    return;
+  }
   let nextUser = {
     name,
-    phone,
+    phone: loginMode === "phone" ? phone : "",
+    email: loginMode === "email" ? email : "",
+    accountType: loginMode,
     credits: currentUser?.credits ?? 30,
     createdAt: currentUser?.createdAt || new Date().toISOString()
   };
   let shouldSyncLocalState = false;
   try {
-    const data = await apiRequest("/api/login", {
+    const path = loginMode === "email" ? "/api/email-login" : "/api/login";
+    const body = loginMode === "email" ? { name, email, code } : { name, phone };
+    const data = await apiRequest(path, {
       method: "POST",
-      body: JSON.stringify({ name, phone })
+      body: JSON.stringify(body)
     });
     nextUser = data.user || nextUser;
     userOrders = Array.isArray(data.orders) ? data.orders : [];
@@ -1140,6 +1227,10 @@ function formatOrderTime(value) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function escapeHtml(value) {

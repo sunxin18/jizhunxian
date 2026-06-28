@@ -18,6 +18,7 @@ http://localhost:4177/
 - 后续 Git 开发目录建议：`/home/ubuntu/projects/jizhunxian`
 - 后端端口：`8080`
 - 数据库：`data/app.db`，首次启动会从旧版 `data/db.json` 自动迁移。
+- 邮箱验证码：在服务器 `data/.env` 配置 `RESEND_API_KEY`，可选 `RESEND_FROM`。
 - 本机检查：`curl http://127.0.0.1:8080/api/health`
 - 启动方式：`cd ~/yangjibao && nohup python3 server.py > yangjibao.log 2>&1 &`
 - 开机自启：已写入 `ubuntu` 用户的 `crontab @reboot`
@@ -33,7 +34,7 @@ http://localhost:4177/
 - 持仓管理：录入每只基金持仓金额，自动估算今日盈亏。
 - 智能提醒：本地保存涨跌幅提醒规则，并显示是否触发。
 - Pro 页面：展示 AI 复盘、组合体检、策略回测、提醒点数等按次付费能力。
-- 云端登录：手机号作为账号标识，服务端签发 30 天 token，未登录购买时会先拉起登录弹窗。
+- 云端登录：支持手机号快速登录和邮箱验证码登录，服务端签发 30 天 token，未登录购买时会先拉起登录弹窗。
 - 云端同步：自选、持仓、提醒规则、账号点数和购买记录保存到 SQLite，本地 `localStorage` 作为离线缓存。
 - 订单记录：按次购买会创建待支付订单，用户可在 Pro 页面查看最近订单。
 

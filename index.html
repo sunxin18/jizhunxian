@@ -311,15 +311,30 @@
           </div>
           <button class="ghost login-close" id="loginCloseBtn" title="关闭">×</button>
         </header>
-        <p class="login-copy">输入手机号即可进入；第一次使用会自动创建账号，已有手机号会直接登录并同步云端数据。</p>
+        <p class="login-copy">支持手机号快速进入，也可以用邮箱验证码登录。第一次使用会自动创建账号，已有账号会同步云端数据。</p>
+        <div class="login-tabs segmented" id="loginMode">
+          <button class="active" data-login-mode="phone">手机</button>
+          <button data-login-mode="email">邮箱</button>
+        </div>
         <div class="login-form">
           <label>
             <span>昵称</span>
             <input id="loginName" maxlength="16" placeholder="例如 小林" />
           </label>
-          <label>
+          <label class="phone-login-field">
             <span>手机号</span>
             <input id="loginPhone" maxlength="11" inputmode="numeric" placeholder="例如 13800000000" />
+          </label>
+          <label class="email-login-field" hidden>
+            <span>邮箱</span>
+            <input id="loginEmail" maxlength="120" inputmode="email" autocomplete="email" placeholder="name@example.com" />
+          </label>
+          <label class="email-login-field" hidden>
+            <span>邮箱验证码</span>
+            <div class="code-input-row">
+              <input id="loginCode" maxlength="6" inputmode="numeric" placeholder="6 位验证码" />
+              <button class="ghost" id="sendCodeBtn" type="button">获取验证码</button>
+            </div>
           </label>
           <button class="primary" id="loginSubmitBtn">登录 / 创建账号</button>
         </div>
