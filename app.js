@@ -37,6 +37,7 @@ let stateSyncTimer = null;
 let activeDetailCode = null;
 let activeHistorySize = DEFAULT_HISTORY_SIZE;
 let currentUser = loadUser();
+let userOrders = [];
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -74,7 +75,8 @@ const els = {
   detailRange: $("detailRange"),
   detailStats: $("detailStats"),
   historyChart: $("historyChart"),
-  historyList: $("historyList")
+  historyList: $("historyList"),
+  orderList: $("orderList")
 };
 
 init();
@@ -83,6 +85,7 @@ function init() {
   renderQuickList();
   bindEvents();
   renderUser();
+  renderOrders();
   hydrateServerState();
   loadFundSearch();
   refreshQuotes();
@@ -126,6 +129,10 @@ async function hydrateServerState() {
   try {
     const data = await apiRequest("/api/me");
     if (data.user) saveUser({ ...currentUser, ...data.user, token: currentUser.token });
+    if (Array.isArray(data.orders)) {
+      userOrders = data.orders;
+      renderOrders();
+    }
     if (data.state) {
       state = { ...defaultState, ...data.state };
       saveState();
@@ -155,7 +162,12 @@ async function apiRequest(path, options = {}) {
   if (currentUser?.token) headers.Authorization = `Bearer ${currentUser.token}`;
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "api error");
+  if (!response.ok) {
+    const error = new Error(data.message || data.error || "服务暂不可用");
+    error.status = response.status;
+    error.code = data.error;
+    throw error;
+  }
   return data;
 }
 
@@ -252,7 +264,12 @@ function closeLogin() {
 
 async function submitLogin() {
   const name = els.loginName.value.trim() || "养基用户";
-  const phone = els.loginPhone.value.trim();
+  const phone = els.loginPhone.value.trim().replace(/\D/g, "");
+  if (!/^1[3-9]\d{9}$/.test(phone)) {
+    pulseStatus("请输入 11 位中国大陆手机号");
+    els.loginPhone.focus();
+    return;
+  }
   let nextUser = {
     name,
     phone,
@@ -266,6 +283,7 @@ async function submitLogin() {
       body: JSON.stringify({ name, phone })
     });
     nextUser = data.user || nextUser;
+    userOrders = Array.isArray(data.orders) ? data.orders : [];
     if (data.isNewUser) {
       shouldSyncLocalState = true;
     } else if (data.state) {
@@ -273,10 +291,12 @@ async function submitLogin() {
       saveState();
       renderAll();
     }
-  } catch {
-    pulseStatus("服务器暂不可用，已进入本地缓存账号");
+  } catch (error) {
+    pulseStatus(error.message || "登录服务暂不可用，请稍后再试");
+    return;
   }
   saveUser(nextUser);
+  renderOrders();
   if (shouldSyncLocalState) queueStateSync();
   closeLogin();
   pulseStatus(shouldSyncLocalState ? `账号已创建，${name}` : `欢迎回来，${name}`);
@@ -286,7 +306,9 @@ async function logoutUser() {
   if (currentUser?.token) {
     apiRequest("/api/logout", { method: "POST" }).catch(() => {});
   }
+  userOrders = [];
   saveUser(null);
+  renderOrders();
   pulseStatus("已退出账号");
 }
 
@@ -301,9 +323,13 @@ async function handlePurchase(productName) {
       method: "POST",
       body: JSON.stringify({ productName })
     });
+    if (data.order) {
+      userOrders = [data.order, ...userOrders].slice(0, 10);
+      renderOrders();
+    }
     pulseStatus(`${currentUser.name}，已创建「${productName}」订单 ${data.order.id}`);
-  } catch {
-    pulseStatus(`${currentUser.name}，已进入「${productName}」模拟支付`);
+  } catch (error) {
+    pulseStatus(error.message || `暂时无法创建「${productName}」订单`);
   }
 }
 
@@ -1009,6 +1035,46 @@ function saveAlert() {
   renderAlerts();
 }
 
+function renderOrders() {
+  if (!els.orderList) return;
+  if (!currentUser) {
+    els.orderList.innerHTML = `<div class="empty">登录后，这里会显示你的报告和提醒点数订单。</div>`;
+    return;
+  }
+  if (!userOrders.length) {
+    els.orderList.innerHTML = `<div class="empty">还没有订单。可以先买一次收盘复盘或组合体检报告。</div>`;
+    return;
+  }
+  els.orderList.innerHTML = userOrders
+    .map((order) => {
+      const statusText = orderStatusText(order.status);
+      return `
+        <article class="order-row">
+          <div>
+            <strong>${escapeHtml(order.product)}</strong>
+            <span>${escapeHtml(order.id)} · ${formatOrderTime(order.createdAt)}</span>
+          </div>
+          <div class="order-meta">
+            <strong>${currency((order.amountCents || 0) / 100)}</strong>
+            <span>${statusText}</span>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function orderStatusText(status) {
+  const map = {
+    pending_payment: "待支付",
+    paid: "已支付",
+    fulfilled: "已生成",
+    refunded: "已退款",
+    demo_pending: "待支付"
+  };
+  return map[status] || "处理中";
+}
+
 function parseNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -1064,6 +1130,16 @@ function pulseStatus(text) {
 
 function formatTime(date) {
   return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatOrderTime(value) {
+  if (!value) return "--";
+  return new Date(value).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function escapeHtml(value) {
