@@ -110,6 +110,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         db = read_db()
         key = user_key(name, phone)
         user = db["users"].get(key)
+        is_new_user = user is None
         if not user:
             user = {
                 "id": key,
@@ -126,7 +127,11 @@ class AppHandler(SimpleHTTPRequestHandler):
         db["users"][key] = user
         db["sessions"][token] = {"userId": key, "createdAt": now_ms()}
         write_db(db)
-        return self.json_response({"user": public_user(user, token), "state": user.get("state", DEFAULT_STATE)})
+        return self.json_response({
+            "user": public_user(user, token),
+            "state": user.get("state", DEFAULT_STATE),
+            "isNewUser": is_new_user,
+        })
 
     def logout(self):
         token = self.auth_token()

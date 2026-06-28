@@ -223,12 +223,13 @@ function renderUser() {
     return;
   }
 
+  const accountType = currentUser.token ? "云端账号" : "本地缓存账号";
   els.userChip.innerHTML = `
     <div class="account-card">
       <div class="avatar">${escapeHtml(currentUser.name.slice(0, 1).toUpperCase())}</div>
       <div>
         <strong>${escapeHtml(currentUser.name)}</strong>
-        <span>${currentUser.credits} 点数 · 演示账号</span>
+        <span>${currentUser.credits} 点数 · ${accountType}</span>
       </div>
       <button class="logout-btn" id="logoutBtn" title="退出登录">退出</button>
     </div>
@@ -258,21 +259,25 @@ async function submitLogin() {
     credits: currentUser?.credits ?? 30,
     createdAt: currentUser?.createdAt || new Date().toISOString()
   };
+  let shouldSyncLocalState = false;
   try {
     const data = await apiRequest("/api/login", {
       method: "POST",
       body: JSON.stringify({ name, phone })
     });
     nextUser = data.user || nextUser;
-    if (data.state) {
+    if (data.isNewUser) {
+      shouldSyncLocalState = true;
+    } else if (data.state) {
       state = { ...defaultState, ...data.state };
       saveState();
       renderAll();
     }
   } catch {
-    pulseStatus("服务器暂不可用，已进入本地演示账号");
+    pulseStatus("服务器暂不可用，已进入本地缓存账号");
   }
   saveUser(nextUser);
+  if (shouldSyncLocalState) queueStateSync();
   closeLogin();
   pulseStatus(`欢迎回来，${name}`);
 }
