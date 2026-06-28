@@ -323,14 +323,14 @@ function startEmailCodeCooldown(seconds) {
     if (emailCodeCooldown <= 0) {
       window.clearInterval(emailCodeCooldownTimer);
       els.sendCodeBtn.disabled = false;
-      els.sendCodeBtn.textContent = "获取验证码";
+      els.sendCodeBtn.textContent = "发送验证码";
     }
   }, 1000);
 }
 
 function updateEmailCodeButton() {
   els.sendCodeBtn.disabled = emailCodeCooldown > 0;
-  els.sendCodeBtn.textContent = emailCodeCooldown > 0 ? `${emailCodeCooldown}s` : "获取验证码";
+  els.sendCodeBtn.textContent = emailCodeCooldown > 0 ? `${emailCodeCooldown}s` : "发送验证码";
 }
 
 async function submitLogin() {
