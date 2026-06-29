@@ -20,7 +20,7 @@
         <div class="account-entry" id="userChip">
           <button class="login-trigger" id="loginOpenBtn">
             <span>登录 / 创建账号</span>
-            <small>同步自选 · 购买报告</small>
+            <small>同步自选 · 持仓提醒</small>
           </button>
         </div>
 
@@ -34,17 +34,7 @@
           <button class="nav-item" data-view="alerts" title="提醒">
             <span class="nav-icon">◌</span><strong>提醒</strong>
           </button>
-          <button class="nav-item" data-view="pro" title="Pro">
-            <span class="nav-icon">◇</span><strong>Pro</strong>
-          </button>
         </nav>
-
-        <div class="pro-box">
-          <span class="tag">Pro 预留</span>
-          <h2>AI 复盘 & 调仓建议</h2>
-          <p>看盘免费，复盘、体检、回测和提醒按次解锁，适合偶尔需要判断的基民。</p>
-          <button class="primary small" data-view-jump="pro">查看方案</button>
-        </div>
       </aside>
 
       <main class="main">
@@ -140,7 +130,7 @@
             <div class="panel-head">
               <div>
                 <h3>智能提醒</h3>
-                <p>本地提醒规则已可配置，短信/微信推送可作为收费能力。</p>
+                <p>设置涨跌幅提醒规则，登录后可在不同设备间同步。</p>
               </div>
             </div>
             <div class="alert-builder">
@@ -153,122 +143,6 @@
               <button class="primary" id="saveAlertBtn">保存提醒</button>
             </div>
             <div class="alert-list" id="alertList"></div>
-          </section>
-        </section>
-
-        <section class="view" id="proView">
-          <section class="pay-as-you-go-hero">
-            <div>
-              <p class="eyebrow">PAY PER INSIGHT</p>
-              <h3>按次购买，不绑月费</h3>
-              <p>看盘免费，真正需要判断时再付费：买一次组合体检、一次收盘复盘、一份回测报告，或者一包提醒点数。</p>
-            </div>
-            <div class="hero-ledger">
-              <strong>¥3 起</strong>
-              <span>单次使用 · 结果可保存</span>
-            </div>
-          </section>
-
-          <div class="pricing-grid">
-            <article class="price-card">
-              <span class="tag">轻量</span>
-              <h3>AI 收盘复盘</h3>
-              <strong>¥3/次</strong>
-              <p>收盘后生成当天自选基金解释，适合“今天为什么涨跌”的即时问题。</p>
-              <ul>
-                <li>收益来源拆解</li>
-                <li>拖累基金提示</li>
-                <li>明日关注清单</li>
-              </ul>
-              <button class="primary" data-purchase="AI 收盘复盘">买一次复盘</button>
-            </article>
-            <article class="price-card featured">
-              <span class="tag">最推荐</span>
-              <h3>组合体检报告</h3>
-              <strong>¥9/次</strong>
-              <p>把自选和持仓一起诊断，适合调仓前、补仓前、季度复盘时使用。</p>
-              <ul>
-                <li>行业暴露与重合度</li>
-                <li>回撤压力与集中度评分</li>
-                <li>可执行调仓检查单</li>
-                <li>报告保存 90 天</li>
-              </ul>
-              <button class="primary" data-purchase="组合体检报告">生成体检</button>
-            </article>
-            <article class="price-card">
-              <span class="tag">投研</span>
-              <h3>策略回测报告</h3>
-              <strong>¥19/次</strong>
-              <p>验证“跌多少补、涨多少止盈”的历史表现，适合做计划前使用。</p>
-              <ul>
-                <li>180 日/1 年回测</li>
-                <li>分批买卖模拟</li>
-                <li>最大回撤和胜率</li>
-                <li>PDF 报告导出</li>
-              </ul>
-              <button class="primary" data-purchase="策略回测报告">开始回测</button>
-            </article>
-            <article class="price-card">
-              <span class="tag">点数包</span>
-              <h3>提醒点数</h3>
-              <strong>¥12/30条</strong>
-              <p>按触达次数扣点，适合只在关键涨跌幅、止盈止损线触发时提醒。</p>
-              <ul>
-                <li>微信/短信提醒占位</li>
-                <li>涨跌幅和估值线触发</li>
-                <li>点数不过期</li>
-              </ul>
-              <button class="primary" data-purchase="提醒点数">购买点数</button>
-            </article>
-          </div>
-
-          <section class="order-section">
-            <div class="panel-head">
-              <div>
-                <h3>最近订单</h3>
-                <p>登录后可查看按次购买记录，后续会接入真实支付和报告回看。</p>
-              </div>
-            </div>
-            <div class="order-list" id="orderList"></div>
-          </section>
-
-          <section class="testimonial-section">
-            <div class="panel-head">
-              <div>
-                <h3>用户怎么说</h3>
-                <p>这些评价来自早期体验用户的模拟反馈，用来展示按次付费的价值表达。</p>
-              </div>
-              <div class="testimonial-score">
-                <strong>4.8</strong>
-                <span>单次报告满意度</span>
-              </div>
-            </div>
-            <div class="testimonial-grid">
-              <article class="testimonial-card">
-                <div class="quote-mark">“</div>
-                <p>我不想为了偶尔复盘去包月。现在遇到大跌时买一次组合体检，能看到行业重合和回撤压力，9 块钱解决一个具体问题，这个方式更容易接受。</p>
-                <div class="reviewer">
-                  <strong>林女士</strong>
-                  <span>定投 4 年 · 消费/医药组合</span>
-                </div>
-              </article>
-              <article class="testimonial-card featured-review">
-                <div class="quote-mark">“</div>
-                <p>收盘复盘我会在波动大的日子买，不用每天付费。它把今天亏损拆到具体基金和方向，比我自己翻评论区省时间，也不会被情绪带着走。</p>
-                <div class="reviewer">
-                  <strong>陈先生</strong>
-                  <span>互联网产品经理 · 每月定投</span>
-                </div>
-              </article>
-              <article class="testimonial-card">
-                <div class="quote-mark">“</div>
-                <p>回测报告适合在调仓前买一次。我试了自己的补仓规则，才发现最大回撤比想象大。按次买报告比临时开会员更像工具，也更少负担。</p>
-                <div class="reviewer">
-                  <strong>许同学</strong>
-                  <span>研究生 · 偏指数和行业基金</span>
-                </div>
-              </article>
-            </div>
           </section>
         </section>
 
@@ -311,7 +185,7 @@
           </div>
           <button class="ghost login-close" id="loginCloseBtn" title="关闭">×</button>
         </header>
-        <p class="login-copy">选择一种方式进入基准线。新账号会自动创建，已有账号会同步自选、持仓和订单。</p>
+        <p class="login-copy">选择一种方式进入基准线。新账号会自动创建，已有账号会同步自选、持仓和提醒。</p>
         <div class="login-tabs segmented" id="loginMode">
           <button class="active" data-login-mode="phone">手机</button>
           <button data-login-mode="email">邮箱</button>
@@ -337,7 +211,7 @@
             </div>
           </label>
           <button class="primary" id="loginSubmitBtn">登录 / 创建账号</button>
-          <p class="login-footnote">验证码 10 分钟内有效。我们只用它保护你的云端自选和付费记录。</p>
+          <p class="login-footnote">验证码 10 分钟内有效。我们只用它保护你的云端自选和持仓数据。</p>
         </div>
       </section>
     </div>

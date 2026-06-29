@@ -57,13 +57,6 @@ DEFAULT_STATE = {
     "sort": "custom",
 }
 
-PRODUCTS = {
-    "AI 收盘复盘": {"amountCents": 300, "label": "AI 收盘复盘"},
-    "组合体检报告": {"amountCents": 900, "label": "组合体检报告"},
-    "策略回测报告": {"amountCents": 1900, "label": "策略回测报告"},
-    "提醒点数": {"amountCents": 1200, "label": "提醒点数"},
-}
-
 LOGIN_BUCKET = {}
 EMAIL_BUCKET = {}
 
@@ -102,7 +95,6 @@ def init_db():
               email TEXT NOT NULL DEFAULT '',
               account_type TEXT NOT NULL DEFAULT 'phone',
               account_value TEXT NOT NULL DEFAULT '',
-              credits INTEGER NOT NULL DEFAULT 30,
               state_json TEXT NOT NULL,
               created_at TEXT NOT NULL,
               updated_at INTEGER NOT NULL
@@ -113,16 +105,6 @@ def init_db():
               user_id TEXT NOT NULL,
               created_at INTEGER NOT NULL,
               expires_at INTEGER NOT NULL,
-              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS purchases (
-              id TEXT PRIMARY KEY,
-              user_id TEXT NOT NULL,
-              product TEXT NOT NULL,
-              amount_cents INTEGER NOT NULL,
-              status TEXT NOT NULL,
-              created_at INTEGER NOT NULL,
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
@@ -179,8 +161,8 @@ def migrate_legacy_json():
             conn.execute(
                 """
                 INSERT OR IGNORE INTO users
-                (id, name, phone, email, account_type, account_value, credits, state_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, phone, email, account_type, account_value, state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -189,7 +171,6 @@ def migrate_legacy_json():
                     str(user.get("email") or ""),
                     "email" if user.get("email") else "phone",
                     str(user.get("email") or user.get("phone") or ""),
-                    int(user.get("credits") or 30),
                     state_json,
                     user.get("createdAt") or iso_now(),
                     now_ms(),
@@ -203,23 +184,6 @@ def migrate_legacy_json():
                 VALUES (?, ?, ?, ?)
                 """,
                 (token, session.get("userId"), created_at, created_at + SESSION_TTL_MS),
-            )
-        for order in legacy.get("purchases", []):
-            product = str(order.get("product") or "Pro 服务")[:40]
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO purchases
-                (id, user_id, product, amount_cents, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    order.get("id") or secrets.token_hex(8),
-                    order.get("userId"),
-                    product,
-                    PRODUCTS.get(product, {}).get("amountCents", 0),
-                    order.get("status") or "demo_pending",
-                    int(order.get("createdAt") or now_ms()),
-                ),
             )
     marker.write_text(str(now_ms()), "utf-8")
 
@@ -241,22 +205,11 @@ def public_user(row, token=None):
         "phone": phone,
         "email": row["email"] if "email" in row.keys() else "",
         "accountType": row["account_type"] if "account_type" in row.keys() else "phone",
-        "credits": row["credits"],
         "createdAt": row["created_at"],
     }
     if token:
         payload["token"] = token
     return payload
-
-
-def public_order(row):
-    return {
-        "id": row["id"],
-        "product": row["product"],
-        "amountCents": row["amount_cents"],
-        "status": row["status"],
-        "createdAt": row["created_at"],
-    }
 
 
 def clean_state_payload(state):
@@ -370,13 +323,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             return self.json_response({
                 "user": public_user(user),
                 "state": state_from_row(user),
-                "orders": self.user_orders(user["id"]),
             })
-        if path == "/api/orders":
-            user, _token = self.require_user()
-            if not user:
-                return self.error_response("unauthorized", "请重新登录", 401)
-            return self.json_response({"orders": self.user_orders(user["id"])})
         return super().do_GET()
 
     def do_POST(self):
@@ -391,8 +338,6 @@ class AppHandler(SimpleHTTPRequestHandler):
             return self.logout()
         if path == "/api/state":
             return self.save_state()
-        if path == "/api/purchase":
-            return self.purchase()
         return self.error_response("not_found", "接口不存在", 404)
 
     def login(self):
@@ -500,8 +445,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                 conn.execute(
                     """
                     INSERT INTO users
-                    (id, name, phone, email, account_type, account_value, credits, state_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, name, phone, email, account_type, account_value, state_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id,
@@ -510,7 +455,6 @@ class AppHandler(SimpleHTTPRequestHandler):
                         email,
                         account_type,
                         account_value,
-                        30,
                         json.dumps(DEFAULT_STATE, ensure_ascii=False),
                         created,
                         now_ms(),
@@ -535,7 +479,6 @@ class AppHandler(SimpleHTTPRequestHandler):
         return self.json_response({
             "user": public_user(row, token),
             "state": state_from_row(row),
-            "orders": self.user_orders(user_id),
             "isNewUser": is_new_user,
         })
 
@@ -557,53 +500,6 @@ class AppHandler(SimpleHTTPRequestHandler):
                 (json.dumps(clean_state, ensure_ascii=False), now_ms(), user["id"]),
             )
         return self.json_response({"ok": True, "state": clean_state})
-
-    def purchase(self):
-        user, _token = self.require_user()
-        if not user:
-            return self.error_response("unauthorized", "请重新登录", 401)
-        product = str(self.read_json().get("productName") or "")[:40]
-        if product not in PRODUCTS:
-            return self.error_response("invalid_product", "暂不支持该服务", 422)
-
-        order = {
-            "id": secrets.token_hex(8),
-            "user_id": user["id"],
-            "product": product,
-            "amount_cents": PRODUCTS[product]["amountCents"],
-            "status": "pending_payment",
-            "created_at": now_ms(),
-        }
-        with db_connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO purchases (id, user_id, product, amount_cents, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    order["id"],
-                    order["user_id"],
-                    order["product"],
-                    order["amount_cents"],
-                    order["status"],
-                    order["created_at"],
-                ),
-            )
-        return self.json_response({"ok": True, "order": public_order(order)})
-
-    def user_orders(self, user_id):
-        with db_connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT id, product, amount_cents, status, created_at
-                FROM purchases
-                WHERE user_id = ?
-                ORDER BY created_at DESC
-                LIMIT 10
-                """,
-                (user_id,),
-            ).fetchall()
-        return [public_order(row) for row in rows]
 
     def require_user(self):
         token = self.auth_token()

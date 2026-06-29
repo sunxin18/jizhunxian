@@ -37,7 +37,6 @@ let stateSyncTimer = null;
 let activeDetailCode = null;
 let activeHistorySize = DEFAULT_HISTORY_SIZE;
 let currentUser = loadUser();
-let userOrders = [];
 let loginMode = "phone";
 let emailCodeCooldownTimer = null;
 let emailCodeCooldown = 0;
@@ -82,8 +81,7 @@ const els = {
   detailRange: $("detailRange"),
   detailStats: $("detailStats"),
   historyChart: $("historyChart"),
-  historyList: $("historyList"),
-  orderList: $("orderList")
+  historyList: $("historyList")
 };
 
 init();
@@ -92,7 +90,6 @@ function init() {
   renderQuickList();
   bindEvents();
   renderUser();
-  renderOrders();
   hydrateServerState();
   loadFundSearch();
   refreshQuotes();
@@ -136,10 +133,6 @@ async function hydrateServerState() {
   try {
     const data = await apiRequest("/api/me");
     if (data.user) saveUser({ ...currentUser, ...data.user, token: currentUser.token });
-    if (Array.isArray(data.orders)) {
-      userOrders = data.orders;
-      renderOrders();
-    }
     if (data.state) {
       state = { ...defaultState, ...data.state };
       saveState();
@@ -181,14 +174,6 @@ async function apiRequest(path, options = {}) {
 function bindEvents() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
-  });
-
-  document.querySelectorAll("[data-view-jump]").forEach((button) => {
-    button.addEventListener("click", () => switchView(button.dataset.viewJump));
-  });
-
-  document.querySelectorAll("[data-purchase]").forEach((button) => {
-    button.addEventListener("click", () => handlePurchase(button.dataset.purchase));
   });
 
   els.addFundBtn.addEventListener("click", addFundFromInput);
@@ -239,7 +224,7 @@ function renderUser() {
     els.userChip.innerHTML = `
       <button class="login-trigger" id="loginOpenBtn">
         <span>登录 / 创建账号</span>
-        <small>同步自选 · 购买报告</small>
+        <small>同步自选 · 持仓提醒</small>
       </button>
     `;
     els.loginOpenBtn = $("loginOpenBtn");
@@ -253,7 +238,7 @@ function renderUser() {
       <div class="avatar">${escapeHtml(currentUser.name.slice(0, 1).toUpperCase())}</div>
       <div>
         <strong>${escapeHtml(currentUser.name)}</strong>
-        <span>${currentUser.credits} 点数 · ${accountType}</span>
+        <span>${accountType}</span>
       </div>
       <button class="logout-btn" id="logoutBtn" title="退出登录">退出</button>
     </div>
@@ -358,7 +343,6 @@ async function submitLogin() {
     phone: loginMode === "phone" ? phone : "",
     email: loginMode === "email" ? email : "",
     accountType: loginMode,
-    credits: currentUser?.credits ?? 30,
     createdAt: currentUser?.createdAt || new Date().toISOString()
   };
   let shouldSyncLocalState = false;
@@ -370,7 +354,6 @@ async function submitLogin() {
       body: JSON.stringify(body)
     });
     nextUser = data.user || nextUser;
-    userOrders = Array.isArray(data.orders) ? data.orders : [];
     if (data.isNewUser) {
       shouldSyncLocalState = true;
     } else if (data.state) {
@@ -383,7 +366,6 @@ async function submitLogin() {
     return;
   }
   saveUser(nextUser);
-  renderOrders();
   if (shouldSyncLocalState) queueStateSync();
   closeLogin();
   pulseStatus(shouldSyncLocalState ? `账号已创建，${name}` : `欢迎回来，${name}`);
@@ -393,31 +375,8 @@ async function logoutUser() {
   if (currentUser?.token) {
     apiRequest("/api/logout", { method: "POST" }).catch(() => {});
   }
-  userOrders = [];
   saveUser(null);
-  renderOrders();
   pulseStatus("已退出账号");
-}
-
-async function handlePurchase(productName) {
-  if (!currentUser) {
-    openLogin();
-    pulseStatus("登录后可继续购买");
-    return;
-  }
-  try {
-    const data = await apiRequest("/api/purchase", {
-      method: "POST",
-      body: JSON.stringify({ productName })
-    });
-    if (data.order) {
-      userOrders = [data.order, ...userOrders].slice(0, 10);
-      renderOrders();
-    }
-    pulseStatus(`${currentUser.name}，已创建「${productName}」订单 ${data.order.id}`);
-  } catch (error) {
-    pulseStatus(error.message || `暂时无法创建「${productName}」订单`);
-  }
 }
 
 function switchView(view) {
@@ -427,7 +386,7 @@ function switchView(view) {
   document.querySelectorAll(".view").forEach((section) => {
     section.classList.toggle("active", section.id === `${view}View`);
   });
-  const titles = { dashboard: "今日看盘", portfolio: "组合持仓", alerts: "智能提醒", pro: "Pro 服务" };
+  const titles = { dashboard: "今日看盘", portfolio: "组合持仓", alerts: "智能提醒" };
   els.pageTitle.textContent = titles[view] || "今日看盘";
 }
 
@@ -1060,7 +1019,7 @@ function renderAlerts() {
     .join("");
 
   if (!state.alerts.length) {
-    els.alertList.innerHTML = `<div class="empty">还没有提醒规则。适合做成 Pro 的云端推送能力。</div>`;
+    els.alertList.innerHTML = `<div class="empty">还没有提醒规则。可以设置关键涨跌幅提醒。</div>`;
     return;
   }
 
@@ -1122,46 +1081,6 @@ function saveAlert() {
   renderAlerts();
 }
 
-function renderOrders() {
-  if (!els.orderList) return;
-  if (!currentUser) {
-    els.orderList.innerHTML = `<div class="empty">登录后，这里会显示你的报告和提醒点数订单。</div>`;
-    return;
-  }
-  if (!userOrders.length) {
-    els.orderList.innerHTML = `<div class="empty">还没有订单。可以先买一次收盘复盘或组合体检报告。</div>`;
-    return;
-  }
-  els.orderList.innerHTML = userOrders
-    .map((order) => {
-      const statusText = orderStatusText(order.status);
-      return `
-        <article class="order-row">
-          <div>
-            <strong>${escapeHtml(order.product)}</strong>
-            <span>${escapeHtml(order.id)} · ${formatOrderTime(order.createdAt)}</span>
-          </div>
-          <div class="order-meta">
-            <strong>${currency((order.amountCents || 0) / 100)}</strong>
-            <span>${statusText}</span>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function orderStatusText(status) {
-  const map = {
-    pending_payment: "待支付",
-    paid: "已支付",
-    fulfilled: "已生成",
-    refunded: "已退款",
-    demo_pending: "待支付"
-  };
-  return map[status] || "处理中";
-}
-
 function parseNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -1217,16 +1136,6 @@ function pulseStatus(text) {
 
 function formatTime(date) {
   return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
-function formatOrderTime(value) {
-  if (!value) return "--";
-  return new Date(value).toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
 }
 
 function isValidEmail(value) {
