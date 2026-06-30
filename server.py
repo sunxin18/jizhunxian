@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 import hashlib
+import html
 import json
 import os
 import re
@@ -44,6 +45,8 @@ RESEND_API_URL = "https://api.resend.com/emails"
 RESEND_FROM = os.environ.get("RESEND_FROM", "基准线 <onboarding@resend.dev>")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_DRY_RUN = os.environ.get("RESEND_DRY_RUN", "") == "1"
+FUND_HISTORY_PAGE_SIZE = 20
+HTTP_TIMEOUT_SECONDS = 8
 
 DEFAULT_STATE = {
     "funds": ["161725", "110022", "005827", "003096"],
@@ -55,6 +58,17 @@ DEFAULT_STATE = {
     },
     "alerts": [],
     "sort": "custom",
+}
+
+FUND_PRESETS = {
+    "161725": "招商中证白酒指数A",
+    "110022": "易方达消费行业股票",
+    "005827": "易方达蓝筹精选混合",
+    "003096": "中欧医疗健康混合A",
+    "320007": "诺安成长混合",
+    "000001": "华夏成长混合",
+    "002001": "华夏回报混合A",
+    "260108": "景顺长城新兴成长混合A",
 }
 
 LOGIN_BUCKET = {}
@@ -245,6 +259,107 @@ def clean_state_payload(state):
     return {"funds": funds, "holdings": holdings, "alerts": alerts, "sort": sort}
 
 
+def clean_fund_codes(raw_codes, limit=30):
+    codes = []
+    for raw in str(raw_codes or "").split(","):
+        code = re.sub(r"\D", "", raw)[:6]
+        if len(code) == 6 and code not in codes:
+            codes.append(code)
+        if len(codes) >= limit:
+            break
+    return codes
+
+
+def fund_name(code):
+    return FUND_PRESETS.get(code, f"基金 {code}")
+
+
+def parse_number(value):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_jsonp_quote(code):
+    url = f"https://fundgz.1234567.com.cn/js/{code}.js?rt={now_ms()}"
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        text = response.read().decode("utf-8", "ignore")
+    match = re.search(r"jsonpgz\((.*)\)\s*;?\s*$", text, re.S)
+    if not match:
+        raise RuntimeError("quote parse failed")
+    data = json.loads(match.group(1))
+    return {
+        "code": code,
+        "name": data.get("name") or fund_name(code),
+        "nav": parse_number(data.get("dwjz")),
+        "quote": parse_number(data.get("gsz")),
+        "change": parse_number(data.get("gszzl")),
+        "navDate": data.get("jzrq") or "--",
+        "quoteTime": data.get("gztime") or "--",
+        "live": bool(data.get("name")),
+    }
+
+
+def fallback_quote(code):
+    return {
+        "code": code,
+        "name": fund_name(code),
+        "nav": None,
+        "quote": None,
+        "change": None,
+        "navDate": "--",
+        "quoteTime": "接口暂不可用",
+        "live": False,
+    }
+
+
+def fetch_history(code, size):
+    points = []
+    pages = max(1, min(20, (size + FUND_HISTORY_PAGE_SIZE - 1) // FUND_HISTORY_PAGE_SIZE))
+    for page in range(1, pages + 1):
+        page_points = fetch_history_page(code, page)
+        points.extend(page_points)
+        if len(page_points) < FUND_HISTORY_PAGE_SIZE:
+            break
+    return list(reversed(points[:size]))
+
+
+def fetch_history_page(code, page):
+    url = (
+        "https://fundf10.eastmoney.com/F10DataApi.aspx"
+        f"?type=lsjz&code={code}&page={page}&per={FUND_HISTORY_PAGE_SIZE}&sdate=&edate=&rt={now_ms()}"
+    )
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        text = response.read().decode("utf-8", "ignore")
+    return parse_history_rows(text)
+
+
+def parse_history_rows(text):
+    normalized = html.unescape(text).replace('\\"', '"').replace("\\/", "/")
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", normalized, re.S | re.I)
+    history = []
+    for row in rows:
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S | re.I)
+        clean_cells = [re.sub(r"<[^>]+>", "", cell).strip() for cell in cells]
+        if len(clean_cells) < 2:
+            continue
+        item = {
+            "date": clean_cells[0],
+            "nav": parse_number(clean_cells[1]),
+            "accumulative": parse_number(clean_cells[2]) if len(clean_cells) > 2 else None,
+            "change": parse_number(clean_cells[3].replace("%", "")) if len(clean_cells) > 3 else None,
+            "type": "净值",
+        }
+        if item["date"] and item["nav"] is not None:
+            history.append(item)
+    return history
+
+
 def clean_email(value):
     email = str(value or "").strip().lower()
     if len(email) > 120:
@@ -313,9 +428,15 @@ class AppHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
         if path == "/api/health":
             return self.json_response({"ok": True, "time": now_ms(), "store": "sqlite"})
+        if path == "/api/funds/quotes":
+            return self.fund_quotes(query)
+        if path == "/api/funds/history":
+            return self.fund_history(query)
         if path == "/api/me":
             user, _token = self.require_user()
             if not user:
@@ -339,6 +460,33 @@ class AppHandler(SimpleHTTPRequestHandler):
         if path == "/api/state":
             return self.save_state()
         return self.error_response("not_found", "接口不存在", 404)
+
+    def fund_quotes(self, query):
+        codes = clean_fund_codes((query.get("codes") or [""])[0])
+        if not codes:
+            return self.error_response("invalid_codes", "请传入基金代码", 422)
+        quotes = []
+        for code in codes:
+            try:
+                quotes.append(fetch_jsonp_quote(code))
+            except Exception:
+                quotes.append(fallback_quote(code))
+        return self.json_response({"ok": True, "quotes": quotes, "time": now_ms()})
+
+    def fund_history(self, query):
+        codes = clean_fund_codes((query.get("code") or [""])[0], limit=1)
+        if not codes:
+            return self.error_response("invalid_code", "请传入 6 位基金代码", 422)
+        try:
+            size = int((query.get("size") or ["30"])[0])
+        except ValueError:
+            size = 30
+        size = max(7, min(365, size))
+        try:
+            history = fetch_history(codes[0], size)
+        except Exception:
+            history = []
+        return self.json_response({"ok": True, "code": codes[0], "history": history, "time": now_ms()})
 
     def login(self):
         if not self.allow_login_attempt():

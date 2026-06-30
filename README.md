@@ -36,6 +36,13 @@ http://localhost:4177/
 - 云端登录：支持手机号快速登录和邮箱验证码登录，服务端签发 30 天 token。
 - 云端同步：自选、持仓、提醒规则保存到 SQLite，本地 `localStorage` 作为离线缓存。
 - 历史波动：点开基金详情后可查看 7 日、30 日、90 日、180 日和 1 年走势。
+- iOS MVP：`ios/JiZhunXian.xcodeproj` 已搭好 SwiftUI 原生工程，复用同一套账号、同步和行情接口。
+
+## 移动端 API
+
+- `GET /api/funds/quotes?codes=161725,110022`：批量获取实时估值。
+- `GET /api/funds/history?code=161725&size=30`：获取历史净值走势。
+- `GET /api/me`、`POST /api/state`：账号状态和云端同步。
 
 ## 可升级的产品能力
 
