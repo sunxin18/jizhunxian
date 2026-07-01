@@ -696,6 +696,7 @@ struct FundDetailView: View {
     var quote: FundQuote
     @State private var range = 30
     @State private var points: [HistoryPoint] = []
+    @State private var selectedPoint: HistoryPoint?
     @State private var isLoading = true
 
     private let ranges = [7, 30, 90, 180, 365]
@@ -727,9 +728,11 @@ struct FundDetailView: View {
         defer { isLoading = false }
         do {
             points = try await store.history(code: quote.code, size: range)
+            selectedPoint = nil
         } catch {
             store.errorMessage = error.localizedDescription
             points = []
+            selectedPoint = nil
         }
     }
 
@@ -751,24 +754,8 @@ struct FundDetailView: View {
     }
 
     private var historyChart: some View {
-        Chart(chartPoints) { point in
-            LineMark(
-                x: .value("日期", point.date),
-                y: .value("净值", point.nav ?? 0)
-            )
-            .foregroundStyle(Color.accentColor)
-
-            AreaMark(
-                x: .value("日期", point.date),
-                y: .value("净值", point.nav ?? 0)
-            )
-            .foregroundStyle(Color.accentColor.opacity(0.12))
-        }
-        .chartXAxis(.hidden)
-        .frame(height: 260)
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal)
+        HistoryChartCard(points: chartPoints, selectedPoint: $selectedPoint)
+            .padding(.horizontal)
     }
 
     private var historyList: some View {
@@ -776,6 +763,109 @@ struct FundDetailView: View {
             HistoryPointRow(point: point)
         }
         .listStyle(.plain)
+    }
+}
+
+struct HistoryChartCard: View {
+    let points: [HistoryPoint]
+    @Binding var selectedPoint: HistoryPoint?
+
+    private var activePoint: HistoryPoint? {
+        selectedPoint ?? points.last
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            chartHeader
+            chart
+        }
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var chartHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(activePoint?.date ?? "历史波动")
+                    .font(.headline)
+                Text(selectedPoint == nil ? "点按曲线查看当日数据" : "已选中历史估值")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(percent(activePoint?.change))
+                    .font(.title3.monospacedDigit().bold())
+                    .foregroundStyle(trendColor(activePoint?.change))
+                Text(activePoint?.nav.map { String(format: "净值 %.4f", $0) } ?? "净值 --")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var chart: some View {
+        Chart(points) { point in
+            AreaMark(
+                x: .value("日期", point.date),
+                y: .value("净值", point.nav ?? 0)
+            )
+            .foregroundStyle(Color.accentColor.opacity(0.12))
+
+            LineMark(
+                x: .value("日期", point.date),
+                y: .value("净值", point.nav ?? 0)
+            )
+            .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+            .foregroundStyle(Color.accentColor)
+
+            if let activePoint, activePoint.id == point.id {
+                RuleMark(x: .value("选中日期", point.date))
+                    .foregroundStyle(Color.secondary.opacity(0.45))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+
+                PointMark(
+                    x: .value("日期", point.date),
+                    y: .value("净值", point.nav ?? 0)
+                )
+                .symbolSize(88)
+                .foregroundStyle(trendColor(point.change))
+            }
+        }
+        .chartXAxis(.hidden)
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                selectPoint(at: value.location, proxy: proxy, geometry: geometry)
+                            }
+                    )
+            }
+        }
+        .frame(height: 230)
+    }
+
+    private func selectPoint(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) {
+        guard let plotFrame = proxy.plotFrame else { return }
+        let frame = geometry[plotFrame]
+        let xPosition = location.x - frame.origin.x
+        guard xPosition >= 0, xPosition <= frame.width else { return }
+
+        if let date = proxy.value(atX: xPosition, as: String.self) {
+            selectedPoint = points.first { $0.date == date } ?? nearestPoint(to: date)
+        }
+    }
+
+    private func nearestPoint(to date: String) -> HistoryPoint? {
+        points.min { left, right in
+            abs(left.date.compare(date).rawValue) < abs(right.date.compare(date).rawValue)
+        }
     }
 }
 
