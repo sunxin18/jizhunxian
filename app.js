@@ -49,6 +49,8 @@ const els = {
   metricProfit: $("metricProfit"),
   metricRisk: $("metricRisk"),
   marketInsight: $("marketInsight"),
+  actionBoard: $("actionBoard"),
+  portfolioSummary: $("portfolioSummary"),
   userChip: $("userChip"),
   loginOpenBtn: $("loginOpenBtn"),
   loginOverlay: $("loginOverlay"),
@@ -80,6 +82,7 @@ const els = {
   detailTitle: $("detailTitle"),
   detailRange: $("detailRange"),
   detailStats: $("detailStats"),
+  detailDecision: $("detailDecision"),
   historyChart: $("historyChart"),
   historyList: $("historyList")
 };
@@ -92,6 +95,7 @@ function init() {
   renderUser();
   hydrateServerState();
   loadFundSearch();
+  renderAll();
   refreshQuotes();
   refreshTimer = window.setInterval(refreshQuotes, REFRESH_MS);
 }
@@ -550,6 +554,7 @@ function renderAll() {
   renderSortControl();
   renderMetrics();
   renderInsights();
+  renderActionBoard();
   renderMarketTape();
   renderFundTable();
   renderPortfolio();
@@ -631,6 +636,50 @@ function renderInsights() {
       <span>组合资金</span>
       <strong>${holding ? compactCurrency(holding) : "--"}</strong>
       <small>${liveCount}/${rows.length} 只实时估值 · ${latestTime}</small>
+    </article>
+  `;
+}
+
+function renderActionBoard() {
+  const rows = getRows();
+  const stats = portfolioStats(rows);
+  if (!rows.length) {
+    els.actionBoard.innerHTML = `
+      <article class="action-card primary-action">
+        <span>今日决策台</span>
+        <strong>先建立自选池</strong>
+        <small>添加 3-8 只核心基金后，系统会自动生成盯盘重点。</small>
+      </article>
+    `;
+    return;
+  }
+
+  const valid = rows.filter((row) => row.change !== null);
+  const topMover = valid.slice().sort((a, b) => Math.abs(b.change) - Math.abs(a.change))[0];
+  const heavyRisk = rows
+    .filter((row) => row.holding > 0 && row.change !== null)
+    .sort((a, b) => Math.abs(b.profit || 0) - Math.abs(a.profit || 0))[0];
+  const decision = dailyDecision(stats);
+  const watchName = topMover ? topMover.name.slice(0, 10) : "等待实时估值";
+  const exposureText = stats.totalHolding
+    ? `${compactCurrency(stats.totalHolding)} · 最大单仓 ${percentText(stats.concentration * 100)}`
+    : "未录入持仓";
+
+  els.actionBoard.innerHTML = `
+    <article class="action-card primary-action">
+      <span>今日操作</span>
+      <strong>${decision.title}</strong>
+      <small>${decision.copy}</small>
+    </article>
+    <article class="action-card">
+      <span>优先盯盘</span>
+      <strong class="${trendClass(topMover?.change ?? null)}">${escapeHtml(watchName)}</strong>
+      <small>${topMover ? `波动 ${signed(topMover.change)}%，建议 14:45 前再复核一次。` : "刷新后识别波动最大的基金。"}</small>
+    </article>
+    <article class="action-card">
+      <span>仓位状态</span>
+      <strong>${exposureText}</strong>
+      <small>${positionCopy(stats, heavyRisk)}</small>
     </article>
   `;
 }
@@ -731,6 +780,7 @@ async function openFundDetail(code) {
   els.detailCode.textContent = `${code} · ${quote.live ? "实时估值" : "净值档案"}`;
   els.detailTitle.textContent = quote.name;
   els.detailStats.innerHTML = renderDetailStats(quote, []);
+  els.detailDecision.innerHTML = "";
   els.historyList.innerHTML = "";
   els.detailOverlay.classList.add("open");
   els.detailOverlay.setAttribute("aria-hidden", "false");
@@ -747,10 +797,12 @@ async function loadFundHistory(code, size) {
     if (code !== activeDetailCode || size !== activeHistorySize) return;
     const points = mergeCurrentEstimate(quote, history, size);
     els.detailStats.innerHTML = renderDetailStats(quote, points);
+    els.detailDecision.innerHTML = renderDetailDecision(quote, points);
     els.historyChart.innerHTML = renderHistoryChart(points);
     els.historyList.innerHTML = renderHistoryList(points);
   } catch {
     if (code !== activeDetailCode || size !== activeHistorySize) return;
+    els.detailDecision.innerHTML = "";
     els.historyChart.innerHTML = `<div class="empty">历史净值暂时加载失败，可以稍后再试。</div>`;
   }
 }
@@ -883,6 +935,49 @@ function renderDetailStats(quote, points) {
   `;
 }
 
+function renderDetailDecision(quote, points) {
+  const valid = points.filter((item) => item.nav !== null);
+  const first = valid[0]?.nav;
+  const last = valid[valid.length - 1]?.nav;
+  const rangeChange = first && last ? ((last - first) / first) * 100 : null;
+  const swings = valid.map((item) => item.change).filter((value) => value !== null);
+  const positiveDays = swings.filter((value) => value > 0).length;
+  const pressureDays = swings.filter((value) => value < -1.5).length;
+  const maxUp = swings.length ? Math.max(...swings) : null;
+  const maxDown = swings.length ? Math.min(...swings) : null;
+  const current = quote.change;
+  const tone = current === null ? "等待估值" : current >= 2 ? "强势波动" : current <= -2 ? "回撤压力" : "正常观察";
+  const note =
+    pressureDays >= 2
+      ? "区间内出现多次明显回撤，适合检查是否和你的原计划一致。"
+      : positiveDays >= Math.ceil(swings.length * 0.6)
+        ? "区间上涨天数占优，适合关注是否接近你的止盈或调仓线。"
+        : "波动暂未形成单边趋势，适合继续观察净值确认。";
+
+  return `
+    <article>
+      <span>复盘结论</span>
+      <strong>${tone}</strong>
+      <small>${note}</small>
+    </article>
+    <article>
+      <span>区间胜率</span>
+      <strong>${swings.length ? `${positiveDays}/${swings.length}` : "--"}</strong>
+      <small>上涨日 / 有效净值日</small>
+    </article>
+    <article>
+      <span>波动边界</span>
+      <strong>${maxUp === null ? "--" : `${signed(maxUp)}%`} / ${maxDown === null ? "--" : `${signed(maxDown)}%`}</strong>
+      <small>最大单日上涨 / 下跌</small>
+    </article>
+    <article>
+      <span>区间表现</span>
+      <strong class="${trendClass(rangeChange)}">${rangeChange === null ? "--" : `${signed(rangeChange)}%`}</strong>
+      <small>按当前选择的时间范围估算</small>
+    </article>
+  `;
+}
+
 function renderHistoryChart(points) {
   const valid = points.filter((item) => item.nav !== null);
   if (valid.length < 2) {
@@ -977,40 +1072,100 @@ function renderHistoryList(points) {
 
 function renderPortfolio() {
   const rows = getRows();
+  renderPortfolioSummary(rows);
   if (!rows.length) {
     els.portfolioList.innerHTML = `<div class="empty">添加自选后可录入持仓金额。</div>`;
     return;
   }
+  const stats = portfolioStats(rows);
   els.portfolioList.innerHTML = rows
-    .map(
-      (row) => `
-        <article class="portfolio-row">
-          <div class="fund-name">
+    .map((row) => {
+      const weight = stats.totalHolding && row.holding ? (row.holding / stats.totalHolding) * 100 : null;
+      const plan = rowPlan(row, stats);
+      return `
+        <article class="portfolio-row" data-open="${row.code}" role="button" tabindex="0" aria-label="查看 ${escapeHtml(row.name)} 走势">
+          <div class="fund-name portfolio-open">
             <strong>${escapeHtml(row.name)}</strong>
-            <small>${row.code}</small>
+            <small>${row.code} · 点击看走势</small>
           </div>
-          <input type="number" min="0" step="100" value="${row.holding}" data-holding="${row.code}" />
+          <input type="number" min="0" step="100" value="${row.holding}" data-holding="${row.code}" aria-label="${escapeHtml(row.name)} 持仓金额" />
           <div class="fund-cell">
             <strong class="${trendClass(row.profit)}">${row.holding ? currency(row.profit || 0) : "--"}</strong>
             <span>今日预估</span>
           </div>
           <div class="fund-cell">
-            <strong>${row.change === null ? "--" : `${signed(row.change)}%`}</strong>
-            <span>当前估值</span>
+            <strong>${weight === null ? "--" : percentText(weight)}</strong>
+            <span>仓位占比</span>
           </div>
+          <div class="plan-chip ${plan.level}">${plan.text}</div>
+          <button class="open-detail-btn" data-detail-open="${row.code}" type="button">走势</button>
         </article>
-      `
-    )
+      `;
+    })
     .join("");
 
   els.portfolioList.querySelectorAll("[data-holding]").forEach((input) => {
+    input.addEventListener("click", (event) => event.stopPropagation());
     input.addEventListener("input", () => {
       state.holdings[input.dataset.holding] = Number(input.value || 0);
       saveState();
       renderMetrics();
+      renderInsights();
+      renderActionBoard();
       renderFundTable();
+      renderPortfolioSummary(getRows());
     });
   });
+  els.portfolioList.querySelectorAll("[data-detail-open]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openFundDetail(button.dataset.detailOpen);
+    });
+  });
+  els.portfolioList.querySelectorAll("[data-open]").forEach((row) => {
+    row.addEventListener("click", () => openFundDetail(row.dataset.open));
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openFundDetail(row.dataset.open);
+      }
+    });
+  });
+}
+
+function renderPortfolioSummary(rows) {
+  if (!rows.length) {
+    els.portfolioSummary.innerHTML = "";
+    return;
+  }
+  const stats = portfolioStats(rows);
+  const active = rows.filter((row) => row.holding > 0).length;
+  const biggest = rows
+    .filter((row) => row.holding > 0)
+    .sort((a, b) => b.holding - a.holding)[0];
+  const risk = riskLabel(stats.concentration, stats.volatility);
+  els.portfolioSummary.innerHTML = `
+    <article>
+      <span>总持仓</span>
+      <strong>${stats.totalHolding ? compactCurrency(stats.totalHolding) : "--"}</strong>
+      <small>${active} 只基金录入金额</small>
+    </article>
+    <article>
+      <span>今日盈亏</span>
+      <strong class="${trendClass(stats.profit)}">${stats.totalHolding ? currency(stats.profit) : "--"}</strong>
+      <small>按实时估值粗略估算</small>
+    </article>
+    <article>
+      <span>集中度</span>
+      <strong>${stats.totalHolding ? percentText(stats.concentration * 100) : "--"}</strong>
+      <small>${biggest ? `最大仓：${escapeHtml(biggest.name.slice(0, 8))}` : "暂无最大仓"}</small>
+    </article>
+    <article>
+      <span>风险温度</span>
+      <strong>${risk}</strong>
+      <small>${positionCopy(stats, biggest)}</small>
+    </article>
+  `;
 }
 
 function renderAlerts() {
@@ -1112,6 +1267,11 @@ function compactCurrency(value) {
   return currency(value);
 }
 
+function percentText(value) {
+  if (value === null || !Number.isFinite(value)) return "--";
+  return `${value.toFixed(1)}%`;
+}
+
 function trendClass(value) {
   if (value === null || !Number.isFinite(value) || value === 0) return "flat";
   return value > 0 ? "rise" : "fall";
@@ -1128,6 +1288,57 @@ function riskLabel(concentration, volatility) {
   if (score >= 55) return "偏高";
   if (score >= 30) return "中性";
   return "稳健";
+}
+
+function portfolioStats(rows) {
+  const validChanges = rows.map((row) => row.change).filter((value) => value !== null);
+  const avg = validChanges.length ? validChanges.reduce((sum, value) => sum + value, 0) / validChanges.length : null;
+  const profit = rows.reduce((sum, row) => sum + (row.profit || 0), 0);
+  const totalHolding = rows.reduce((sum, row) => sum + row.holding, 0);
+  const biggest = rows.reduce((max, row) => Math.max(max, row.holding), 0);
+  const concentration = totalHolding ? biggest / totalHolding : 0;
+  const volatility = validChanges.length ? Math.max(...validChanges.map((value) => Math.abs(value))) : 0;
+  return { avg, profit, totalHolding, concentration, volatility };
+}
+
+function dailyDecision(stats) {
+  if (!state.funds.length) {
+    return { title: "先建立自选池", copy: "添加核心基金后，再观察组合涨跌和持仓风险。" };
+  }
+  if (!stats.totalHolding) {
+    return { title: "先录入持仓", copy: "没有金额就无法判断今日盈亏和仓位压力。" };
+  }
+  if (stats.volatility >= 3 || Math.abs(stats.profit) >= stats.totalHolding * 0.018) {
+    return { title: "临近收盘复核", copy: "今日波动较大，建议 14:45 前看一次领涨/回撤基金。" };
+  }
+  if (stats.concentration >= 0.45) {
+    return { title: "检查单仓集中", copy: "最大持仓占比较高，先确认它是否仍符合原计划。" };
+  }
+  if ((stats.avg ?? 0) > 1.2) {
+    return { title: "记录上涨原因", copy: "组合整体偏强，适合记录推动项，避免盘中情绪化操作。" };
+  }
+  if ((stats.avg ?? 0) < -1.2) {
+    return { title: "观察回撤承受", copy: "组合偏弱，先看是否触发你预设的加减仓或止损条件。" };
+  }
+  return { title: "保持观察", copy: "波动在正常范围，重点看收盘前估值是否继续扩大。" };
+}
+
+function positionCopy(stats, focusRow) {
+  if (!stats.totalHolding) return "录入持仓金额后生成仓位判断。";
+  if (stats.concentration >= 0.45) return "单仓偏集中，建议复核配置比例。";
+  if (stats.volatility >= 3) return "盘中波动放大，优先盯住大额持仓。";
+  if (focusRow?.profit && Math.abs(focusRow.profit) > stats.totalHolding * 0.01) return "主要盈亏来自少数持仓，适合做复盘。";
+  return "仓位分布相对均衡。";
+}
+
+function rowPlan(row, stats) {
+  if (!row.holding) return { text: "未录入", level: "neutral" };
+  const weight = stats.totalHolding ? row.holding / stats.totalHolding : 0;
+  if (weight >= 0.45) return { text: "单仓偏重", level: "warn" };
+  if ((row.change ?? 0) >= 2.5) return { text: "强势复核", level: "rise-plan" };
+  if ((row.change ?? 0) <= -2.5) return { text: "回撤观察", level: "fall-plan" };
+  if (Math.abs(row.profit || 0) >= row.holding * 0.018) return { text: "盈亏放大", level: "warn" };
+  return { text: "正常跟踪", level: "neutral" };
 }
 
 function pulseStatus(text) {

@@ -79,6 +79,7 @@
           </div>
 
           <section class="insight-strip" id="marketInsight" aria-label="今日市场脉冲"></section>
+          <section class="action-board" id="actionBoard" aria-label="今日决策台"></section>
 
           <section class="panel command-panel">
             <div class="search-wrap">
@@ -118,9 +119,10 @@
             <div class="panel-head">
               <div>
                 <h3>组合持仓</h3>
-                <p>填入金额后，看盘页会自动估算今日盈亏。</p>
+                <p>填入金额后，看盘页会自动估算今日盈亏，并给出仓位观察提示。</p>
               </div>
             </div>
+            <div class="portfolio-summary" id="portfolioSummary"></div>
             <div class="portfolio-list" id="portfolioList"></div>
           </section>
         </section>
@@ -171,6 +173,7 @@
         </div>
 
         <div class="detail-stats" id="detailStats"></div>
+        <div class="detail-decision" id="detailDecision"></div>
         <div class="chart-panel" id="historyChart"></div>
         <div class="history-list" id="historyList"></div>
       </aside>
