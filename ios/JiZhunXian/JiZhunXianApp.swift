@@ -919,19 +919,34 @@ struct HoldingEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading) {
-                    Text(row.quote.name)
-                        .font(.headline)
-                    Text(row.quote.code)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            NavigationLink {
+                FundDetailView(quote: row.quote)
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(row.quote.name)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text("\(row.quote.code) · 点击查看走势")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text(row.profit.map(currency) ?? "--")
+                            .font(.headline.monospacedDigit())
+                            .foregroundStyle(trendColor(row.profit))
+                        Text(percent(row.quote.change))
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(trendColor(row.quote.change))
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
-                Spacer()
-                Text(row.profit.map(currency) ?? "--")
-                    .font(.headline.monospacedDigit())
-                    .foregroundStyle(trendColor(row.profit))
             }
+            .buttonStyle(.plain)
+
             TextField("持仓金额", text: $amountText)
                 .keyboardType(.decimalPad)
                 .textFieldStyle(.roundedBorder)
