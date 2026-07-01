@@ -231,7 +231,7 @@ final class APIClient {
     func logout() async {
         guard token != nil else { return }
         let url = baseURL.appending(path: "/api/logout")
-        try? await send(url, method: "POST", body: Data("{}".utf8), as: EmptyResponse.self)
+        let _: EmptyResponse? = try? await send(url, method: "POST", body: Data("{}".utf8), as: EmptyResponse.self)
     }
 
     private func send<T: Decodable>(_ url: URL, method: String, body: Data?, as type: T.Type) async throws -> T {
@@ -703,16 +703,7 @@ struct FundDetailView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Picker("区间", selection: $range) {
-                    ForEach(ranges, id: \.self) { value in
-                        Text(value == 365 ? "1年" : "\(value)日").tag(value)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .onChange(of: range) {
-                    Task { await load() }
-                }
+                rangePicker
 
                 if isLoading {
                     ProgressView("正在加载历史波动")
@@ -720,43 +711,8 @@ struct FundDetailView: View {
                 } else if points.isEmpty {
                     ContentUnavailableView("暂无历史数据", systemImage: "chart.xyaxis.line", description: Text("稍后再试或切换区间"))
                 } else {
-                    Chart(points.filter { $0.nav != nil }) { point in
-                        LineMark(
-                            x: .value("日期", point.date),
-                            y: .value("净值", point.nav ?? 0)
-                        )
-                        .foregroundStyle(.accent)
-                        AreaMark(
-                            x: .value("日期", point.date),
-                            y: .value("净值", point.nav ?? 0)
-                        )
-                        .foregroundStyle(.accent.opacity(0.12))
-                    }
-                    .chartXAxis(.hidden)
-                    .frame(height: 260)
-                    .padding()
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
-                    .padding(.horizontal)
-
-                    List(points.reversed()) { point in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(point.date)
-                                Text(point.type ?? "净值")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            VStack(alignment: .trailing) {
-                                Text(point.nav.map { String(format: "%.4f", $0) } ?? "--")
-                                    .font(.body.monospacedDigit().bold())
-                                Text(percent(point.change))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(trendColor(point.change))
-                            }
-                        }
-                    }
-                    .listStyle(.plain)
+                    historyChart
+                    historyList
                 }
             }
             .background(Color(.systemGroupedBackground))
@@ -774,6 +730,74 @@ struct FundDetailView: View {
         } catch {
             store.errorMessage = error.localizedDescription
             points = []
+        }
+    }
+
+    private var rangePicker: some View {
+        Picker("区间", selection: $range) {
+            ForEach(ranges, id: \.self) { value in
+                Text(value == 365 ? "1年" : "\(value)日").tag(value)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal)
+        .onChange(of: range) {
+            Task { await load() }
+        }
+    }
+
+    private var chartPoints: [HistoryPoint] {
+        points.filter { $0.nav != nil }
+    }
+
+    private var historyChart: some View {
+        Chart(chartPoints) { point in
+            LineMark(
+                x: .value("日期", point.date),
+                y: .value("净值", point.nav ?? 0)
+            )
+            .foregroundStyle(Color.accentColor)
+
+            AreaMark(
+                x: .value("日期", point.date),
+                y: .value("净值", point.nav ?? 0)
+            )
+            .foregroundStyle(Color.accentColor.opacity(0.12))
+        }
+        .chartXAxis(.hidden)
+        .frame(height: 260)
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal)
+    }
+
+    private var historyList: some View {
+        List(points.reversed()) { point in
+            HistoryPointRow(point: point)
+        }
+        .listStyle(.plain)
+    }
+}
+
+struct HistoryPointRow: View {
+    let point: HistoryPoint
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(point.date)
+                Text(point.type ?? "净值")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing) {
+                Text(point.nav.map { String(format: "%.4f", $0) } ?? "--")
+                    .font(.body.monospacedDigit().bold())
+                Text(percent(point.change))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(trendColor(point.change))
+            }
         }
     }
 }
